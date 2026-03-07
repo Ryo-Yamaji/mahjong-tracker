@@ -1,5 +1,11 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 // ============================================================
 // ルール設定（3人麻雀）
@@ -24,20 +30,26 @@ const DEFAULT_MEMBERS = [
 ];
 
 // ============================================================
-// Storage（共有）
+// Storage（Supabase共有）
 // ============================================================
-const STORAGE_KEY = "mahjong-tracker-data-v4";
-
 async function loadData() {
   try {
-    const res = await window.storage.get(STORAGE_KEY, true);
-    if (res?.value) return JSON.parse(res.value);
-  } catch (_) {}
-  return null;
+    const { data } = await supabase
+      .from('games')
+      .select('data')
+      .eq('id', 1)
+      .single();
+    return data?.data ?? null;
+  } catch (_) { return null; }
 }
 
-async function saveData(data) {
-  try { await window.storage.set(STORAGE_KEY, JSON.stringify(data), true); } catch (_) {}
+async function saveData(payload) {
+  try {
+    await supabase
+      .from('games')
+      .update({ data: payload, updated_at: new Date().toISOString() })
+      .eq('id', 1);
+  } catch (_) {}
 }
 
 // ============================================================
