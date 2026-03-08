@@ -110,6 +110,96 @@ function CustomTooltip({ active, payload, label }) {
 }
 
 // ============================================================
+// チップ入力モーダル
+// ============================================================
+function ChipModal({ session, members, onConfirm, onSkip }) {
+  const participantMembers = session.participantIds.map(id => members.find(m => m.id === id)).filter(Boolean);
+  const [chips, setChips] = useState(Object.fromEntries(participantMembers.map(m => [m.id, ""])));
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 1000, padding: "20px",
+    }}>
+      <div style={{
+        background: "#0c0c1e", border: "1px solid #2a2a40",
+        borderRadius: 18, padding: "24px 20px", width: "100%", maxWidth: 400,
+      }}>
+        <div style={{ fontSize: 22, textAlign: "center", marginBottom: 6 }}>🪙</div>
+        <div style={{ fontWeight: 800, fontSize: 16, textAlign: "center", marginBottom: 4 }}>チップ入力</div>
+        <div style={{ fontSize: 12, color: "#555", textAlign: "center", marginBottom: 20 }}>
+          1枚につき +2点。マイナスも可。空欄は0扱い。
+        </div>
+
+        {participantMembers.map(m => (
+          <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+            <Avatar name={m.name} color={m.color} size={28} />
+            <span style={{ flex: 1, fontWeight: 600, fontSize: 14 }}>{m.name}</span>
+            <input
+              type="number"
+              value={chips[m.id]}
+              onChange={e => setChips(prev => ({ ...prev, [m.id]: e.target.value }))}
+              placeholder="0"
+              style={{
+                width: 80, padding: "8px 10px", borderRadius: 8,
+                border: "1.5px solid #2a2a40", background: "#080816",
+                color: "#fff", fontSize: 14, outline: "none",
+                fontFamily: "inherit", textAlign: "right",
+              }}
+            />
+            <span style={{ fontSize: 12, color: "#555", minWidth: 14 }}>枚</span>
+            <span style={{
+              minWidth: 44, textAlign: "right", fontSize: 13, fontWeight: 700,
+              color: (Number(chips[m.id]) || 0) >= 0 ? "#34c988" : "#e85d5d",
+            }}>
+              {(Number(chips[m.id]) || 0) >= 0 ? "+" : ""}{(Number(chips[m.id]) || 0) * 2}
+            </span>
+          </div>
+        ))}
+
+        {(() => {
+          const total = participantMembers.reduce((sum, m) => sum + (Number(chips[m.id]) || 0), 0);
+          const isZero = total === 0;
+          return (
+            <>
+              <div style={{
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+                padding: "10px 14px", borderRadius: 10,
+                background: isZero ? "#0a1a0a" : "#1a0a0a",
+                border: `1px solid ${isZero ? "#1a3a1a" : "#3a1a1a"}`,
+                marginTop: 16, marginBottom: 4,
+              }}>
+                <span style={{ fontSize: 13, color: "#888" }}>合計枚数</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: isZero ? "#34c988" : "#e85d5d" }}>
+                  {total > 0 ? "+" : ""}{total}枚　{isZero ? "✓ OK" : "※ 合計が0になるように入力してください"}
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+                <button onClick={onSkip} style={{
+                  flex: 1, padding: "12px", borderRadius: 10, border: "1px solid #2a2a40",
+                  background: "transparent", color: "#666", cursor: "pointer",
+                  fontSize: 14, fontFamily: "inherit",
+                }}>スキップ</button>
+                <button
+                  onClick={() => isZero && onConfirm(chips)}
+                  disabled={!isZero}
+                  style={{
+                    flex: 2, padding: "12px", borderRadius: 10, border: "none",
+                    background: isZero ? "linear-gradient(135deg,#e85d5d,#f7b731)" : "#1c1c35",
+                    color: isZero ? "#fff" : "#444",
+                    fontWeight: 700, cursor: isZero ? "pointer" : "not-allowed",
+                    fontSize: 14, fontFamily: "inherit", transition: "all 0.2s",
+                  }}>確定して終了</button>
+              </div>
+            </>
+          );
+        })()}
+      </div>
+    </div>
+  );
+}
+
 // セッションバナー（アクティブなセッションを常に表示）
 // ============================================================
 function SessionBanner({ session, members, onEnd }) {
@@ -165,6 +255,14 @@ function RecordTab({ members, session, setSession, games, setGames, onSave, rule
   const [yakitoriList, setYakitoriList] = useState([]);
   const [recordError, setRecordError] = useState("");
   const [saved, setSaved] = useState(false);
+  // チップモーダル
+  const [showChipModal, setShowChipModal] = useState(false);
+  // 入力モード: null | "simple" | "detail"
+  const [inputMode, setInputMode] = useState(null);
+  // 簡単入力用
+  const [simpleScores, setSimpleScores] = useState({});
+  const [simpleError, setSimpleError] = useState("");
+  const [simpleSaved, setSimpleSaved] = useState(false);
 
   useEffect(() => {
     if (session) {
@@ -181,7 +279,7 @@ function RecordTab({ members, session, setSession, games, setGames, onSave, rule
     });
   };
 
-  const startSession = () => {
+  const startSession = (mode) => {
     if (setupParticipants.length < 3) return setSetupError("3人以上を選択してください");
     setSetupError("");
     const newSession = {
@@ -191,22 +289,64 @@ function RecordTab({ members, session, setSession, games, setGames, onSave, rule
       gameCount: 0,
     };
     setSession(newSession);
+    setInputMode(mode);
     const ids = setupParticipants.slice(0, 3);
     setSelected([ids[0] ?? null, ids[1] ?? null, ids[2] ?? null]);
     setPoints(["", "", ""]);
     setTobiList([]);
     setYakitoriList([]);
+    setSimpleScores({});
     onSave(undefined, undefined, newSession);
   };
 
   const endSession = () => {
+    setShowChipModal(true);
+  };
+
+  const finalizeSession = (chips) => {
+    // チップスコアをgamesに反映
+    const participantIds = session.participantIds;
+    let updatedGames = [...games];
+    participantIds.forEach(memberId => {
+      const chipCount = Number(chips?.[memberId]) || 0;
+      if (chipCount === 0) return;
+      const chipScore = chipCount * 2;
+      // そのセッションの最後の対局にチップを付加（新規チップゲームとして追加）
+    });
+
+    // チップを別レコードとして保存
+    const chipEntries = participantIds
+      .map(memberId => ({ memberId, chips: Number(chips?.[memberId]) || 0 }))
+      .filter(e => e.chips !== 0);
+
+    if (chipEntries.length > 0) {
+      const chipGame = {
+        id: Date.now(),
+        date: session.date,
+        sessionId: session.id,
+        isChip: true,
+        result: chipEntries.map(e => ({
+          memberId: e.memberId,
+          rawPoints: 0,
+          rank: 0,
+          score: e.chips * 2,
+          chips: e.chips,
+        })),
+      };
+      updatedGames = [...updatedGames, chipGame];
+    }
+
+    setGames(updatedGames);
     setSession(null);
     setSelected([null, null, null]);
     setPoints(["", "", ""]);
     setTobiList([]);
     setYakitoriList([]);
     setSetupParticipants([]);
-    onSave(undefined, undefined, null);
+    setShowChipModal(false);
+    setInputMode(null);
+    setSimpleScores({});
+    onSave(undefined, updatedGames, null);
   };
 
   const toggleSelected = (id) => {
@@ -396,21 +536,181 @@ function RecordTab({ members, session, setSession, games, setGames, onSave, rule
 
       {setupError && <p style={{ color: "#e85d5d", fontSize: 13, marginBottom: 10 }}>{setupError}</p>}
 
-      <button onClick={startSession} disabled={setupParticipants.length < 3} style={{
-        width: "100%", padding: 14, borderRadius: 12, border: "none",
-        background: setupParticipants.length >= 3 ? "linear-gradient(135deg,#e85d5d,#f7b731)" : "#1c1c35",
-        color: setupParticipants.length >= 3 ? "#fff" : "#555",
-        fontWeight: 700, fontSize: 15, cursor: setupParticipants.length >= 3 ? "pointer" : "not-allowed",
-        fontFamily: "inherit", transition: "all 0.2s",
-        boxShadow: setupParticipants.length >= 3 ? "0 4px 20px #e85d5d33" : "none",
-      }}>対局開始 🀄</button>
+      <SectionTitle>④ 入力モードを選択</SectionTitle>
+      <div style={{ display: "flex", gap: 10 }}>
+        <button onClick={() => startSession("simple")} disabled={setupParticipants.length < 3} style={{
+          flex: 1, padding: "16px 10px", borderRadius: 12, border: "1px solid #2a2a40",
+          background: setupParticipants.length >= 3 ? "#0c0c1e" : "#070710",
+          color: setupParticipants.length >= 3 ? "#e0e0e0" : "#333",
+          fontWeight: 700, fontSize: 14, cursor: setupParticipants.length >= 3 ? "pointer" : "not-allowed",
+          fontFamily: "inherit", transition: "all 0.2s", textAlign: "center",
+        }}>
+          <div style={{ fontSize: 22, marginBottom: 6 }}>⚡</div>
+          <div>簡単入力</div>
+          <div style={{ fontSize: 11, color: "#555", fontWeight: 400, marginTop: 4 }}>成績の±だけ入力</div>
+        </button>
+        <button onClick={() => startSession("detail")} disabled={setupParticipants.length < 3} style={{
+          flex: 1, padding: "16px 10px", borderRadius: 12, border: "none",
+          background: setupParticipants.length >= 3 ? "linear-gradient(135deg,#e85d5d,#f7b731)" : "#1c1c35",
+          color: setupParticipants.length >= 3 ? "#fff" : "#555",
+          fontWeight: 700, fontSize: 14, cursor: setupParticipants.length >= 3 ? "pointer" : "not-allowed",
+          fontFamily: "inherit", transition: "all 0.2s", textAlign: "center",
+          boxShadow: setupParticipants.length >= 3 ? "0 4px 20px #e85d5d33" : "none",
+        }}>
+          <div style={{ fontSize: 22, marginBottom: 6 }}>🀄</div>
+          <div>詳細入力</div>
+          <div style={{ fontSize: 11, color: setupParticipants.length >= 3 ? "#ffffff99" : "#333", fontWeight: 400, marginTop: 4 }}>点数から計算</div>
+        </button>
+      </div>
     </div>
   );
 
+  // 簡単入力：記録
+  const submitSimple = () => {
+    setSimpleError("");
+    const participantIds = session.participantIds;
+    const scores = participantIds.map(id => Number(simpleScores[id]) || 0);
+    const total = scores.reduce((a, b) => a + b, 0);
+    if (total !== 0) return setSimpleError(`合計が ${total > 0 ? "+" : ""}${total} です。合計が±0になるように入力してください`);
+
+    // スコア順に順位を自動判定（同点は入力順）
+    const ranked = participantIds
+      .map((id, i) => ({ id, score: Number(simpleScores[id]) || 0, i }))
+      .sort((a, b) => b.score !== a.score ? b.score - a.score : a.i - b.i);
+
+    const result = participantIds.map(id => {
+      const rank = ranked.findIndex(r => r.id === id) + 1;
+      return { memberId: id, rawPoints: 0, rank, score: Number(simpleScores[id]) || 0 };
+    });
+
+    const updatedSession = { ...session, gameCount: session.gameCount + 1 };
+    const newGame = { id: Date.now(), date: session.date, sessionId: session.id, isSimple: true, result };
+    const nextGames = [...games, newGame];
+
+    setGames(nextGames);
+    setSession(updatedSession);
+    setSimpleSaved(true);
+    setSimpleScores({});
+    onSave(undefined, nextGames, updatedSession);
+    setTimeout(() => setSimpleSaved(false), 1500);
+  };
+
   // ── 対局進行中 ──
+
+  // 簡単入力モード
+  if (session && inputMode === "simple") return (
+    <div>
+      <SessionBanner session={session} members={members} onEnd={endSession} />
+      {showChipModal && (
+        <ChipModal
+          session={session}
+          members={members}
+          onConfirm={finalizeSession}
+          onSkip={() => finalizeSession({})}
+        />
+      )}
+
+      <SectionTitle>成績を入力（{session.gameCount + 1}局目）</SectionTitle>
+      <div style={{ fontSize: 12, color: "#666", marginBottom: 12 }}>各プレイヤーの成績を±で入力してください（合計±0）</div>
+
+      {session.participantIds.map(id => {
+        const m = members.find(x => x.id === id);
+        if (!m) return null;
+        const val = simpleScores[id] ?? "";
+        const num = Number(val);
+        return (
+          <Card key={id} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <Avatar name={m.name} color={m.color} size={30} />
+            <span style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{m.name}</span>
+            <input
+              type="number" value={val}
+              onChange={e => setSimpleScores(prev => ({ ...prev, [id]: e.target.value }))}
+              placeholder="0"
+              style={{
+                width: 90, padding: "9px 12px", borderRadius: 8, textAlign: "right",
+                border: "1.5px solid #1c1c35", background: "#080816",
+                color: "#fff", fontSize: 16, outline: "none", fontFamily: "inherit",
+              }}
+            />
+            {val !== "" && (
+              <span style={{ minWidth: 40, fontSize: 13, fontWeight: 700, color: num >= 0 ? "#34c988" : "#e85d5d" }}>
+                {num > 0 ? "+" : ""}{num}
+              </span>
+            )}
+          </Card>
+        );
+      })}
+
+      {/* 合計表示 */}
+      {(() => {
+        const total = session.participantIds.reduce((s, id) => s + (Number(simpleScores[id]) || 0), 0);
+        const allFilled = session.participantIds.every(id => simpleScores[id] !== undefined && simpleScores[id] !== "");
+        if (!allFilled) return null;
+        return (
+          <Card style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 12, color: "#666" }}>合計</span>
+            <span style={{ fontWeight: 700, color: total === 0 ? "#34c988" : "#e85d5d" }}>
+              {total > 0 ? "+" : ""}{total}　{total === 0 ? "✓ OK" : "※ 合計が0になるように入力"}
+            </span>
+          </Card>
+        );
+      })()}
+
+      {simpleError && <p style={{ color: "#e85d5d", fontSize: 13, marginBottom: 10 }}>{simpleError}</p>}
+
+      <button onClick={submitSimple} style={{
+        width: "100%", padding: 14, borderRadius: 12, border: "none",
+        background: simpleSaved ? "#34c988" : "linear-gradient(135deg,#e85d5d,#f7b731)",
+        color: "#fff", fontWeight: 700, fontSize: 15, cursor: "pointer",
+        fontFamily: "inherit", transition: "background 0.3s",
+        boxShadow: "0 4px 20px #e85d5d33",
+      }}>
+        {simpleSaved ? `✓ 記録！（計${session.gameCount}局）` : `この対局を記録する（${session.gameCount + 1}局目）`}
+      </button>
+
+      {/* セッション内の対局履歴 */}
+      {games.filter(g => g.sessionId === session.id).length > 0 && (
+        <>
+          <div style={{ height: 1, background: "#1c1c35", margin: "20px 0" }} />
+          <SectionTitle>この対局の記録</SectionTitle>
+          {[...games.filter(g => g.sessionId === session.id)].reverse().map((g, i, arr) => (
+            <Card key={g.id} style={{ borderColor: g.isChip ? "#2a2a10" : "#1e2a1e" }}>
+              <div style={{ fontSize: 11, color: g.isChip ? "#f7b731" : "#555", marginBottom: 6 }}>
+                {g.isChip ? "🪙 チップ" : `第${arr.filter(x => !x.isChip).length - arr.filter(x => !x.isChip).indexOf(g)}局`}
+              </div>
+              {[...g.result].sort((a, b) => a.rank - b.rank).map(r => {
+                const m = members.find(x => x.id === r.memberId);
+                if (!m) return null;
+                return (
+                  <div key={r.memberId} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, color: RANK_COLORS[Math.min(r.rank-1,2)], minWidth: 22, fontWeight: 700 }}>
+                      {g.isChip ? "" : RANK_LABELS[r.rank-1]}
+                    </span>
+                    <Avatar name={m.name} color={m.color} size={20} />
+                    <span style={{ flex: 1, fontSize: 12, color: "#ccc" }}>{m.name}</span>
+                    {g.isChip && <span style={{ fontSize: 11, color: "#f7b731" }}>{r.chips > 0 ? "+" : ""}{r.chips}枚</span>}
+                    <ScoreBadge value={r.score} size={12} />
+                  </div>
+                );
+              })}
+            </Card>
+          ))}
+        </>
+      )}
+    </div>
+  );
+
   return (
     <div>
       <SessionBanner session={session} members={members} onEnd={endSession} />
+      {showChipModal && (
+        <ChipModal
+          session={session}
+          members={members}
+          onConfirm={finalizeSession}
+          onSkip={() => finalizeSession({})}
+        />
+      )}
 
       {/* 今局のメンバー選択 */}
       <SectionTitle>今局の3人を選択</SectionTitle>
@@ -588,17 +888,23 @@ function RecordTab({ members, session, setSession, games, setGames, onSave, rule
           <div style={{ height: 1, background: "#1c1c35", margin: "20px 0" }} />
           <SectionTitle>この対局の記録</SectionTitle>
           {[...games.filter(g => g.sessionId === session.id)].reverse().map((g, i, arr) => (
-            <Card key={g.id} style={{ borderColor: "#1e2a1e" }}>
-              <div style={{ fontSize: 11, color: "#555", marginBottom: 6 }}>第{arr.length - i}局</div>
-              {[...g.result].sort((a,b) => a.rank - b.rank).map(r => {
+            <Card key={g.id} style={{ borderColor: g.isChip ? "#2a2a10" : "#1e2a1e" }}>
+              <div style={{ fontSize: 11, color: g.isChip ? "#f7b731" : "#555", marginBottom: 6 }}>
+                {g.isChip ? "🪙 チップ" : `第${arr.filter(x => !x.isChip).length - arr.filter(x => !x.isChip).indexOf(g)}局`}
+              </div>
+              {[...g.result].sort((a,b) => b.score - a.score).map(r => {
                 const m = members.find(x => x.id === r.memberId);
                 if (!m) return null;
                 return (
                   <div key={r.memberId} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontSize: 10, color: RANK_COLORS[r.rank-1], minWidth: 22, fontWeight: 700 }}>{RANK_LABELS[r.rank-1]}</span>
+                    {!g.isChip && <span style={{ fontSize: 10, color: RANK_COLORS[r.rank-1], minWidth: 22, fontWeight: 700 }}>{RANK_LABELS[r.rank-1]}</span>}
+                    {g.isChip && <span style={{ fontSize: 10, color: "#555", minWidth: 22 }}></span>}
                     <Avatar name={m.name} color={m.color} size={20} />
                     <span style={{ flex: 1, fontSize: 12, color: "#ccc" }}>{m.name}</span>
-                    <span style={{ fontSize: 11, color: "#555" }}>{r.rawPoints.toLocaleString()}</span>
+                    {g.isChip
+                      ? <span style={{ fontSize: 11, color: "#f7b731" }}>{r.chips > 0 ? "+" : ""}{r.chips}枚</span>
+                      : <span style={{ fontSize: 11, color: "#555" }}>{r.rawPoints.toLocaleString()}</span>
+                    }
                     {r.yakitori && <span style={{ fontSize: 10 }}>🔥</span>}
                     {r.tobi && r.tobi.length > 0 && <span style={{ fontSize: 10, color: r.tobi.some(t => t.flyerId === r.memberId) ? "#34c988" : "#e85d5d" }}>✈</span>}
                     <ScoreBadge value={r.score} size={12} />
@@ -720,30 +1026,40 @@ function DayDetailPage({ date, dayGames, members, onBack, onDeleteGame, onDelete
 
       {/* 対局一覧 */}
       <SectionTitle>対局一覧</SectionTitle>
-      {dayGames.map((g, gi) => (
-        <Card key={g.id}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <span style={{ fontSize: 12, color: "#888", fontWeight: 700 }}>第{gi + 1}局</span>
-            <button onClick={() => onDeleteGame(g.id)} style={{
-              padding: "3px 10px", borderRadius: 6, border: "1px solid #2a2a40",
-              background: "transparent", color: "#555", cursor: "pointer", fontSize: 11,
-            }}>削除</button>
-          </div>
-          {[...g.result].sort((a, b) => a.rank - b.rank).map(r => {
-            const m = members.find(x => x.id === r.memberId);
-            if (!m) return null;
-            return (
-              <div key={r.memberId} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                <span style={{ fontSize: 11, color: RANK_COLORS[r.rank-1], minWidth: 22, fontWeight: 700 }}>{RANK_LABELS[r.rank-1]}</span>
-                <Avatar name={m.name} color={m.color} size={24} />
-                <span style={{ flex: 1, fontSize: 13, color: "#ccc" }}>{m.name}</span>
-                <span style={{ fontSize: 12, color: "#555" }}>{r.rawPoints.toLocaleString()}点</span>
-                <ScoreBadge value={r.score} size={14} />
-              </div>
-            );
-          })}
-        </Card>
-      ))}
+      {dayGames.map((g, gi) => {
+        const normalGames = dayGames.filter(x => !x.isChip);
+        const normalIdx = normalGames.indexOf(g);
+        return (
+          <Card key={g.id} style={{ borderColor: g.isChip ? "#2a2a10" : undefined }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <span style={{ fontSize: 12, color: g.isChip ? "#f7b731" : "#888", fontWeight: 700 }}>
+                {g.isChip ? "🪙 チップ" : `第${normalIdx + 1}局`}
+              </span>
+              <button onClick={() => onDeleteGame(g.id)} style={{
+                padding: "3px 10px", borderRadius: 6, border: "1px solid #2a2a40",
+                background: "transparent", color: "#555", cursor: "pointer", fontSize: 11,
+              }}>削除</button>
+            </div>
+            {[...g.result].sort((a, b) => g.isChip ? b.score - a.score : a.rank - b.rank).map(r => {
+              const m = members.find(x => x.id === r.memberId);
+              if (!m) return null;
+              return (
+                <div key={r.memberId} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  {!g.isChip && <span style={{ fontSize: 11, color: RANK_COLORS[r.rank-1], minWidth: 22, fontWeight: 700 }}>{RANK_LABELS[r.rank-1]}</span>}
+                  {g.isChip && <span style={{ minWidth: 22 }} />}
+                  <Avatar name={m.name} color={m.color} size={24} />
+                  <span style={{ flex: 1, fontSize: 13, color: "#ccc" }}>{m.name}</span>
+                  {g.isChip
+                    ? <span style={{ fontSize: 12, color: "#f7b731" }}>{r.chips > 0 ? "+" : ""}{r.chips}枚</span>
+                    : <span style={{ fontSize: 12, color: "#555" }}>{r.rawPoints.toLocaleString()}点</span>
+                  }
+                  <ScoreBadge value={r.score} size={14} />
+                </div>
+              );
+            })}
+          </Card>
+        );
+      })}
     </div>
   );
 }
