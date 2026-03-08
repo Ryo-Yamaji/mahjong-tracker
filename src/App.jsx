@@ -1,5 +1,11 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 // ============================================================
 // ルール設定（3人麻雀）
@@ -24,20 +30,26 @@ const DEFAULT_MEMBERS = [
 ];
 
 // ============================================================
-// Storage（共有）
+// Storage（Supabase共有）
 // ============================================================
-const STORAGE_KEY = "mahjong-tracker-data-v4";
-
 async function loadData() {
   try {
-    const res = await window.storage.get(STORAGE_KEY, true);
-    if (res?.value) return JSON.parse(res.value);
-  } catch (_) {}
-  return null;
+    const { data } = await supabase
+      .from('games')
+      .select('data')
+      .eq('id', 1)
+      .single();
+    return data?.data ?? null;
+  } catch (_) { return null; }
 }
 
-async function saveData(data) {
-  try { await window.storage.set(STORAGE_KEY, JSON.stringify(data), true); } catch (_) {}
+async function saveData(payload) {
+  try {
+    await supabase
+      .from('games')
+      .update({ data: payload, updated_at: new Date().toISOString() })
+      .eq('id', 1);
+  } catch (_) {}
 }
 
 // ============================================================
@@ -980,9 +992,234 @@ function MembersTab({ members, setMembers, onSave }) {
 }
 
 // ============================================================
+// 編集モーダル
+// ============================================================
+function EditModal({ game, members, allMembers, onSave, onClose }) {
+  const isChip = game.isChip;
+  const isSimple = game.isSimple;
+
+  // 日付
+  const dateToISO = (jaDate) => {
+    // "YYYY/M/D" → "YYYY-MM-DD"
+    const [y, m, d] = jaDate.replace(/\//g, "-").split("-");
+    return `${y}-${m.padStart(2,"0")}-${d.padStart(2,"0")}`;
+  };
+  const [editDate, setEditDate] = useState(dateToISO(game.date));
+
+  // 参加者（チップ・通常共通）
+  const currentParticipantIds = [...new Set(game.result.map(r => r.memberId))];
+  const [participantIds, setParticipantIds] = useState(currentParticipantIds);
+  const toggleParticipant = (id) => {
+    setParticipantIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  // チップ編集
+  const [chips, setChips] = useState(
+    Object.fromEntries(game.result.map(r => [r.memberId, r.chips ?? 0]))
+  );
+
+  // 通常対局 / 簡単入力 編集
+  const [scores, setScores] = useState(
+    Object.fromEntries(game.result.map(r => [r.memberId, isSimple ? r.score : r.rawPoints]))
+  );
+
+  const [error, setError] = useState("");
+
+  const handleSave = () => {
+    setError("");
+    const newDate = new Date(editDate + "T00:00:00").toLocaleDateString("ja-JP");
+
+    if (isChip) {
+      // チップ合計チェック
+      const total = participantIds.reduce((s, id) => s + (Number(chips[id]) || 0), 0);
+      if (total !== 0) return setError(`チップ合計が ${total > 0 ? "+" : ""}${total} です。±0になるように入力してください`);
+      const newResult = participantIds.map(id => ({
+        memberId: id, rawPoints: 0, rank: 0,
+        score: (Number(chips[id]) || 0) * 2,
+        chips: Number(chips[id]) || 0,
+      })).filter(r => r.chips !== 0);
+      onSave({ ...game, date: newDate, result: newResult });
+      return;
+    }
+
+    if (isSimple) {
+      // 簡単入力: スコア合計チェック
+      const total = participantIds.reduce((s, id) => s + (Number(scores[id]) || 0), 0);
+      if (total !== 0) return setError(`合計が ${total > 0 ? "+" : ""}${total} です。±0になるように入力してください`);
+      const ranked = participantIds
+        .map((id, i) => ({ id, score: Number(scores[id]) || 0, i }))
+        .sort((a, b) => b.score !== a.score ? b.score - a.score : a.i - b.i);
+      const newResult = participantIds.map(id => ({
+        memberId: id, rawPoints: 0,
+        rank: ranked.findIndex(r => r.id === id) + 1,
+        score: Number(scores[id]) || 0,
+      }));
+      onSave({ ...game, date: newDate, result: newResult });
+      return;
+    }
+
+    // 詳細入力: 点数から再計算
+    const pts = participantIds.map(id => Number(scores[id]) || 0);
+    const ptTotal = pts.reduce((a, b) => a + b, 0);
+    if (ptTotal !== RULES.startPoints * participantIds.length) {
+      return setError(`合計が${ptTotal.toLocaleString()}点です。${(RULES.startPoints * participantIds.length).toLocaleString()}点になるように入力してください`);
+    }
+    const ranked = participantIds
+      .map((id, i) => ({ id, pt: Number(scores[id]) || 0, i }))
+      .sort((a, b) => b.pt !== a.pt ? b.pt - a.pt : a.i - b.i);
+    const newResult = participantIds.map(id => {
+      const rank = ranked.findIndex(r => r.id === id) + 1;
+      return { memberId: id, rawPoints: Number(scores[id]) || 0, rank, score: calcScore(Number(scores[id]) || 0, rank) };
+    });
+    onSave({ ...game, date: newDate, result: newResult });
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)",
+      display: "flex", alignItems: "flex-start", justifyContent: "center",
+      zIndex: 1000, padding: "20px", overflowY: "auto",
+    }}>
+      <div style={{
+        background: "#0c0c1e", border: "1px solid #2a2a40",
+        borderRadius: 18, padding: "24px 20px", width: "100%", maxWidth: 440,
+        marginTop: 20,
+      }}>
+        <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 20 }}>
+          {isChip ? "🪙 チップを編集" : "✏️ 対局を編集"}
+        </div>
+
+        {/* 日付 */}
+        <SectionTitle>日付</SectionTitle>
+        <Card style={{ marginBottom: 16 }}>
+          <input
+            type="date" value={editDate} onChange={e => setEditDate(e.target.value)}
+            style={{
+              width: "100%", padding: "8px 10px", borderRadius: 8,
+              border: "1.5px solid #2a2a40", background: "#080816",
+              color: "#e0e0e0", fontSize: 15, fontFamily: "inherit", outline: "none",
+              boxSizing: "border-box",
+            }}
+          />
+        </Card>
+
+        {/* 参加者 */}
+        <SectionTitle>参加者</SectionTitle>
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {allMembers.map(m => {
+              const sel = participantIds.includes(m.id);
+              return (
+                <button key={m.id} onClick={() => toggleParticipant(m.id)} style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "6px 12px", borderRadius: 20,
+                  border: `2px solid ${sel ? m.color : "#2a2a40"}`,
+                  background: sel ? m.color + "22" : "transparent",
+                  color: sel ? m.color : "#888",
+                  fontFamily: "inherit", fontSize: 13, fontWeight: sel ? 700 : 400,
+                  cursor: "pointer", transition: "all 0.15s",
+                }}>
+                  <Avatar name={m.name} color={sel ? m.color : "#555"} size={20} />
+                  {m.name}
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+
+        {/* チップ入力 */}
+        {isChip && (
+          <>
+            <SectionTitle>チップ枚数</SectionTitle>
+            {participantIds.map(id => {
+              const m = allMembers.find(x => x.id === id);
+              if (!m) return null;
+              const val = chips[id] ?? 0;
+              return (
+                <Card key={id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <Avatar name={m.name} color={m.color} size={26} />
+                  <span style={{ flex: 1, fontWeight: 600 }}>{m.name}</span>
+                  <input
+                    type="number" value={val}
+                    onChange={e => setChips(prev => ({ ...prev, [id]: e.target.value }))}
+                    style={{
+                      width: 80, padding: "8px 10px", borderRadius: 8, textAlign: "right",
+                      border: "1.5px solid #2a2a40", background: "#080816",
+                      color: "#fff", fontSize: 14, outline: "none", fontFamily: "inherit",
+                    }}
+                  />
+                  <span style={{ fontSize: 12, color: "#555" }}>枚</span>
+                  <span style={{ minWidth: 40, textAlign: "right", fontSize: 13, fontWeight: 700,
+                    color: (Number(val)||0) >= 0 ? "#34c988" : "#e85d5d" }}>
+                    {(Number(val)||0) >= 0 ? "+" : ""}{(Number(val)||0) * 2}
+                  </span>
+                </Card>
+              );
+            })}
+          </>
+        )}
+
+        {/* スコア入力（通常 or 簡単） */}
+        {!isChip && (
+          <>
+            <SectionTitle>{isSimple ? "成績（±）" : "終了点数"}</SectionTitle>
+            {participantIds.map(id => {
+              const m = allMembers.find(x => x.id === id);
+              if (!m) return null;
+              return (
+                <Card key={id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <Avatar name={m.name} color={m.color} size={26} />
+                  <span style={{ flex: 1, fontWeight: 600 }}>{m.name}</span>
+                  <input
+                    type="number" value={scores[id] ?? ""}
+                    onChange={e => setScores(prev => ({ ...prev, [id]: e.target.value }))}
+                    placeholder={isSimple ? "0" : "35000"}
+                    style={{
+                      width: 100, padding: "8px 10px", borderRadius: 8, textAlign: "right",
+                      border: "1.5px solid #2a2a40", background: "#080816",
+                      color: "#fff", fontSize: 14, outline: "none", fontFamily: "inherit",
+                    }}
+                  />
+                  {isSimple && scores[id] !== "" && scores[id] !== undefined && (
+                    <span style={{ minWidth: 36, textAlign: "right", fontSize: 13, fontWeight: 700,
+                      color: (Number(scores[id])||0) >= 0 ? "#34c988" : "#e85d5d" }}>
+                      {(Number(scores[id])||0) > 0 ? "+" : ""}{Number(scores[id])||0}
+                    </span>
+                  )}
+                </Card>
+              );
+            })}
+          </>
+        )}
+
+        {error && <p style={{ color: "#e85d5d", fontSize: 13, margin: "8px 0" }}>{error}</p>}
+
+        <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+          <button onClick={onClose} style={{
+            flex: 1, padding: "12px", borderRadius: 10, border: "1px solid #2a2a40",
+            background: "transparent", color: "#666", cursor: "pointer",
+            fontSize: 14, fontFamily: "inherit",
+          }}>キャンセル</button>
+          <button onClick={handleSave} style={{
+            flex: 2, padding: "12px", borderRadius: 10, border: "none",
+            background: "linear-gradient(135deg,#4f9cf9,#34c988)",
+            color: "#fff", fontWeight: 700, cursor: "pointer",
+            fontSize: 14, fontFamily: "inherit",
+          }}>保存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // 日別詳細ページ
 // ============================================================
-function DayDetailPage({ date, dayGames, members, onBack, onDeleteGame, onDeleteAll }) {
+function DayDetailPage({ date, dayGames, members, allMembers, onBack, onDeleteGame, onDeleteAll, onEditGame }) {
+  const [editingGame, setEditingGame] = useState(null);
+
   const dayTotal = {};
   members.forEach(m => { dayTotal[m.id] = 0; });
   dayGames.forEach(g => g.result.forEach(r => {
@@ -994,6 +1231,15 @@ function DayDetailPage({ date, dayGames, members, onBack, onDeleteGame, onDelete
 
   return (
     <div>
+      {editingGame && (
+        <EditModal
+          game={editingGame}
+          members={members}
+          allMembers={allMembers}
+          onSave={(updated) => { onEditGame(updated); setEditingGame(null); }}
+          onClose={() => setEditingGame(null)}
+        />
+      )}
       {/* 戻るボタン + 日付 */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
         <button onClick={onBack} style={{
@@ -1036,10 +1282,16 @@ function DayDetailPage({ date, dayGames, members, onBack, onDeleteGame, onDelete
               <span style={{ fontSize: 12, color: g.isChip ? "#f7b731" : "#888", fontWeight: 700 }}>
                 {g.isChip ? "🪙 チップ" : `第${normalIdx + 1}局`}
               </span>
-              <button onClick={() => onDeleteGame(g.id)} style={{
-                padding: "3px 10px", borderRadius: 6, border: "1px solid #2a2a40",
-                background: "transparent", color: "#555", cursor: "pointer", fontSize: 11,
-              }}>削除</button>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => setEditingGame(g)} style={{
+                  padding: "3px 10px", borderRadius: 6, border: "1px solid #2a3a4a",
+                  background: "transparent", color: "#4f9cf9", cursor: "pointer", fontSize: 11,
+                }}>編集</button>
+                <button onClick={() => onDeleteGame(g.id)} style={{
+                  padding: "3px 10px", borderRadius: 6, border: "1px solid #2a2a40",
+                  background: "transparent", color: "#555", cursor: "pointer", fontSize: 11,
+                }}>削除</button>
+              </div>
             </div>
             {[...g.result].sort((a, b) => g.isChip ? b.score - a.score : a.rank - b.rank).map(r => {
               const m = members.find(x => x.id === r.memberId);
@@ -1129,6 +1381,16 @@ function StatsTab({ members, games, setGames, onSave }) {
     const next = games.filter(g => g.date !== date);
     setGames(next);
     onSave(undefined, next, undefined);
+  };
+
+  const editGame = (updated) => {
+    const next = games.map(g => g.id === updated.id ? updated : g);
+    setGames(next);
+    onSave(undefined, next, undefined);
+    // 日付が変わった場合はselectedDateも更新
+    if (selectedDate && updated.date !== selectedDate) {
+      setSelectedDate(updated.date);
+    }
   };
 
   return (
@@ -1239,6 +1501,7 @@ function StatsTab({ members, games, setGames, onSave }) {
             date={selectedDate}
             dayGames={dayGames}
             members={members}
+            allMembers={members}
             onBack={() => setSelectedDate(null)}
             onDeleteGame={(id) => {
               deleteGame(id);
@@ -1248,6 +1511,7 @@ function StatsTab({ members, games, setGames, onSave }) {
               deleteDayGames(selectedDate);
               setSelectedDate(null);
             }}
+            onEditGame={editGame}
           />
         );
       })()}
