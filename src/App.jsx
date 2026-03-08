@@ -1,11 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
 
 // ============================================================
 // ルール設定（3人麻雀）
@@ -30,26 +24,20 @@ const DEFAULT_MEMBERS = [
 ];
 
 // ============================================================
-// Storage（Supabase共有）
+// Storage（共有）
 // ============================================================
+const STORAGE_KEY = "mahjong-tracker-data-v4";
+
 async function loadData() {
   try {
-    const { data } = await supabase
-      .from('games')
-      .select('data')
-      .eq('id', 1)
-      .single();
-    return data?.data ?? null;
-  } catch (_) { return null; }
+    const res = await window.storage.get(STORAGE_KEY, true);
+    if (res?.value) return JSON.parse(res.value);
+  } catch (_) {}
+  return null;
 }
 
-async function saveData(payload) {
-  try {
-    await supabase
-      .from('games')
-      .update({ data: payload, updated_at: new Date().toISOString() })
-      .eq('id', 1);
-  } catch (_) {}
+async function saveData(data) {
+  try { await window.storage.set(STORAGE_KEY, JSON.stringify(data), true); } catch (_) {}
 }
 
 // ============================================================
@@ -687,7 +675,7 @@ function MembersTab({ members, setMembers, onSave }) {
 // ============================================================
 // 日別詳細ページ
 // ============================================================
-function DayDetailPage({ date, dayGames, members, onBack, onDeleteGame }) {
+function DayDetailPage({ date, dayGames, members, onBack, onDeleteGame, onDeleteAll }) {
   const dayTotal = {};
   members.forEach(m => { dayTotal[m.id] = 0; });
   dayGames.forEach(g => g.result.forEach(r => {
@@ -706,10 +694,15 @@ function DayDetailPage({ date, dayGames, members, onBack, onDeleteGame }) {
           background: "transparent", color: "#aaa", cursor: "pointer",
           fontSize: 13, fontFamily: "inherit",
         }}>← 戻る</button>
-        <div>
+        <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 800, fontSize: 17 }}>{date}</div>
           <div style={{ fontSize: 11, color: "#555" }}>{dayGames.length}対局</div>
         </div>
+        <button onClick={() => { if (window.confirm(`${date}の対局データをすべて削除しますか？`)) onDeleteAll(); }} style={{
+          padding: "7px 12px", borderRadius: 9, border: "1px solid #3a2a2a",
+          background: "transparent", color: "#e85d5d", cursor: "pointer",
+          fontSize: 12, fontFamily: "inherit",
+        }}>この日を全削除</button>
       </div>
 
       {/* 日計サマリー */}
@@ -815,6 +808,12 @@ function StatsTab({ members, games, setGames, onSave }) {
     onSave(undefined, next, undefined);
   };
 
+  const deleteDayGames = (date) => {
+    const next = games.filter(g => g.date !== date);
+    setGames(next);
+    onSave(undefined, next, undefined);
+  };
+
   return (
     <div>
       <SubTabBar
@@ -889,6 +888,10 @@ function StatsTab({ members, games, setGames, onSave }) {
                         <span style={{ fontWeight: 700, fontSize: 15, color: "#e0e0e0" }}>{date}</span>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <span style={{ fontSize: 12, color: "#555" }}>{dayGames.length}対局</span>
+                          <span
+                            onClick={e => { e.stopPropagation(); if (window.confirm(`${date}の対局データをすべて削除しますか？`)) deleteDayGames(date); }}
+                            style={{ fontSize: 11, color: "#555", padding: "3px 8px", borderRadius: 5, border: "1px solid #2a2a40", cursor: "pointer" }}
+                          >削除</span>
                           <span style={{ fontSize: 14, color: "#444" }}>›</span>
                         </div>
                       </div>
@@ -923,6 +926,10 @@ function StatsTab({ members, games, setGames, onSave }) {
             onDeleteGame={(id) => {
               deleteGame(id);
               if (games.filter(g => g.date === selectedDate).length <= 1) setSelectedDate(null);
+            }}
+            onDeleteAll={() => {
+              deleteDayGames(selectedDate);
+              setSelectedDate(null);
             }}
           />
         );
