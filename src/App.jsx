@@ -539,15 +539,16 @@ function RecordTab({ members, session, setSession, games, setGames, onSave, rule
       <SectionTitle>④ 入力モードを選択</SectionTitle>
       <div style={{ display: "flex", gap: 10 }}>
         <button onClick={() => startSession("simple")} disabled={setupParticipants.length < 3} style={{
-          flex: 1, padding: "16px 10px", borderRadius: 12, border: "1px solid #2a2a40",
-          background: setupParticipants.length >= 3 ? "#0c0c1e" : "#070710",
-          color: setupParticipants.length >= 3 ? "#e0e0e0" : "#333",
+          flex: 1, padding: "16px 10px", borderRadius: 12, border: "none",
+          background: setupParticipants.length >= 3 ? "linear-gradient(135deg,#4f9cf9,#34c988)" : "#1c1c35",
+          color: setupParticipants.length >= 3 ? "#fff" : "#555",
           fontWeight: 700, fontSize: 14, cursor: setupParticipants.length >= 3 ? "pointer" : "not-allowed",
           fontFamily: "inherit", transition: "all 0.2s", textAlign: "center",
+          boxShadow: setupParticipants.length >= 3 ? "0 4px 20px #4f9cf933" : "none",
         }}>
           <div style={{ fontSize: 22, marginBottom: 6 }}>⚡</div>
           <div>簡単入力</div>
-          <div style={{ fontSize: 11, color: "#555", fontWeight: 400, marginTop: 4 }}>成績の±だけ入力</div>
+          <div style={{ fontSize: 11, color: setupParticipants.length >= 3 ? "#ffffffaa" : "#333", fontWeight: 400, marginTop: 4 }}>成績の±だけ入力</div>
         </button>
         <button onClick={() => startSession("detail")} disabled={setupParticipants.length < 3} style={{
           flex: 1, padding: "16px 10px", borderRadius: 12, border: "none",
