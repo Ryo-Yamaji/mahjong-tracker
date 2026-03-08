@@ -1324,31 +1324,49 @@ function StatsTab({ members, games, setGames, onSave }) {
   const [subTab, setSubTab] = useState("ranking");
   const [focusMember, setFocusMember] = useState(null);
   const [selectedDate, setSelectedDate] = useState(null);
+  const [rankingMode, setRankingMode] = useState("total"); // "total" | "chip"
+  const [graphMode, setGraphMode] = useState("total");     // "total" | "chip" 
 
-  const stats = useMemo(() => {
+  const toDate = s => new Date(s.replace(/\//g, "-").replace(/(\d+)-(\d+)-(\d+)/, (_, y, mo, d) => `${y}-${mo.padStart(2,"0")}-${d.padStart(2,"0")}`));
+
+  const buildStats = (targetGames) => {
     const map = {};
     members.forEach(m => { map[m.id] = { ...m, games: 0, total: 0, ranks: [0,0,0] }; });
-    games.forEach(g => g.result.forEach(r => {
+    targetGames.forEach(g => g.result.forEach(r => {
       if (!map[r.memberId]) return;
       map[r.memberId].games++;
       map[r.memberId].total += r.score;
-      map[r.memberId].ranks[r.rank - 1]++;
+      if (r.rank >= 1 && r.rank <= 3) map[r.memberId].ranks[r.rank - 1]++;
     }));
     return Object.values(map).sort((a,b) => b.total - a.total);
-  }, [members, games]);
+  };
 
-  const activeMembers = useMemo(() => members.filter(m => {
-    return games.some(g => g.result.find(r => r.memberId === m.id));
-  }), [members, games]);
-
-  const chartData = useMemo(() => {
+  const buildChartData = (targetGames) => {
+    const sorted = [...targetGames].sort((a, b) => toDate(a.date) - toDate(b.date));
     const cum = {};
     members.forEach(m => { cum[m.id] = 0; });
-    return games.map((g, i) => {
+    return sorted.map((g, i) => {
       g.result.forEach(r => { if (cum[r.memberId] !== undefined) cum[r.memberId] += r.score; });
       return { game: i + 1, ...Object.fromEntries(members.map(m => [m.id, Math.round(cum[m.id] * 10) / 10])) };
     });
-  }, [members, games]);
+  };
+
+  // 総合（通常+チップ合算）
+  const stats = useMemo(() => buildStats(games), [members, games]);
+  // チップのみ
+  const chipStats = useMemo(() => buildStats(games.filter(g => g.isChip)), [members, games]);
+
+  const activeMembers = useMemo(() => members.filter(m =>
+    games.some(g => g.result.find(r => r.memberId === m.id))
+  ), [members, games]);
+  const chipActiveMembers = useMemo(() => members.filter(m =>
+    games.filter(g => g.isChip).some(g => g.result.find(r => r.memberId === m.id))
+  ), [members, games]);
+
+  // 総合グラフ（通常+チップ合算）
+  const chartData = useMemo(() => buildChartData(games), [members, games]);
+  // チップのみグラフ
+  const chipChartData = useMemo(() => buildChartData(games.filter(g => g.isChip)), [members, games]);
 
   const h2hData = useMemo(() => {
     if (!focusMember) return null;
@@ -1407,26 +1425,42 @@ function StatsTab({ members, games, setGames, onSave }) {
       {/* ── 順位表 ── */}
       {subTab === "ranking" && !selectedDate && (
         <div>
-          {stats.filter(s => s.games > 0).length === 0
-            ? <p style={{ color: "#444", textAlign: "center", padding: "40px 0" }}>対局を記録しましょう</p>
-            : stats.filter(s => s.games > 0).map((m, i) => (
-              <Card key={m.id} style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <span style={{ fontSize: 20, minWidth: 28, color: i < 3 ? RANK_COLORS[i] : "#444", fontWeight: 800 }}>{i + 1}</span>
-                <Avatar name={m.name} color={m.color} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 700, marginBottom: 2 }}>{m.name}</div>
-                  <div style={{ fontSize: 11, color: "#555" }}>
-                    {m.games}戦　
-                    <span style={{ color: RANK_COLORS[0] }}>1位:{m.ranks[0]}</span>　
-                    <span style={{ color: RANK_COLORS[1] }}>2位:{m.ranks[1]}</span>　
-                    <span style={{ color: RANK_COLORS[2] }}>3位:{m.ranks[2]}</span>
-                    　1位率:{Math.round(m.ranks[0]/m.games*100)}%
+          {/* トグル */}
+          <div style={{ display: "flex", gap: 0, marginBottom: 16, borderRadius: 10, overflow: "hidden", border: "1px solid #2a2a40", width: "fit-content" }}>
+            {[["total","💯 総合"],["chip","🪙 チップ"]].map(([key, label]) => (
+              <button key={key} onClick={() => setRankingMode(key)} style={{
+                padding: "7px 18px", border: "none", fontFamily: "inherit", fontSize: 13,
+                fontWeight: rankingMode === key ? 700 : 400,
+                background: rankingMode === key ? "#2a2a50" : "transparent",
+                color: rankingMode === key ? "#fff" : "#555",
+                cursor: "pointer", transition: "all 0.15s",
+              }}>{label}</button>
+            ))}
+          </div>
+
+          {(() => {
+            const currentStats = rankingMode === "chip" ? chipStats : stats;
+            return currentStats.filter(s => s.games > 0).length === 0
+              ? <p style={{ color: "#444", textAlign: "center", padding: "40px 0" }}>
+                  {rankingMode === "chip" ? "チップが記録されていません" : "対局を記録しましょう"}
+                </p>
+              : currentStats.filter(s => s.games > 0).map((m, i) => (
+                <Card key={m.id} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <span style={{ fontSize: 20, minWidth: 28, color: i < 3 ? RANK_COLORS[i] : "#444", fontWeight: 800 }}>{i + 1}</span>
+                  <Avatar name={m.name} color={m.color} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, marginBottom: 2 }}>{m.name}</div>
+                    <div style={{ fontSize: 11, color: "#555" }}>
+                      {rankingMode === "chip"
+                        ? <>{m.games}回参加</>
+                        : <>{m.games}戦　<span style={{ color: RANK_COLORS[0] }}>1位:{m.ranks[0]}</span>　<span style={{ color: RANK_COLORS[1] }}>2位:{m.ranks[1]}</span>　<span style={{ color: RANK_COLORS[2] }}>3位:{m.ranks[2]}</span>　1位率:{m.games > 0 ? Math.round(m.ranks[0]/m.games*100) : 0}%</>
+                      }
+                    </div>
                   </div>
-                </div>
-                <ScoreBadge value={m.total} size={18} />
-              </Card>
-            ))
-          }
+                  <ScoreBadge value={m.total} size={18} />
+                </Card>
+              ));
+          })()}
 
           {games.length > 0 && (() => {
             const byDate = {};
@@ -1519,61 +1553,83 @@ function StatsTab({ members, games, setGames, onSave }) {
       {/* ── グラフ ── */}
       {subTab === "graph" && (
         <div>
-          {games.length < 2
-            ? <p style={{ color: "#444", textAlign: "center", padding: "40px 0" }}>2対局以上記録するとグラフが表示されます</p>
-            : <>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
-                {activeMembers.map(m => (
-                  <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: m.color }} />
-                    <span style={{ fontSize: 12, color: "#aaa" }}>{m.name}</span>
-                  </div>
-                ))}
-              </div>
-              <Card style={{ padding: "16px 8px" }}>
-                <ResponsiveContainer width="100%" height={240}>
-                  <LineChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
-                    <XAxis dataKey="game" tick={{ fill: "#555", fontSize: 11 }} tickLine={false} axisLine={{ stroke: "#1c1c35" }} />
-                    <YAxis tick={{ fill: "#555", fontSize: 11 }} tickLine={false} axisLine={false} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <ReferenceLine y={0} stroke="#2a2a4a" strokeDasharray="4 4" />
-                    {activeMembers.map(m => (
-                      <Line key={m.id} type="monotone" dataKey={m.id} name={m.name}
-                        stroke={m.color} strokeWidth={2}
-                        dot={{ fill: m.color, r: 3 }} activeDot={{ r: 5 }} />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              </Card>
+          {/* トグル */}
+          <div style={{ display: "flex", gap: 0, marginBottom: 16, borderRadius: 10, overflow: "hidden", border: "1px solid #2a2a40", width: "fit-content" }}>
+            {[["total","💯 総合"],["chip","🪙 チップ"]].map(([key, label]) => (
+              <button key={key} onClick={() => setGraphMode(key)} style={{
+                padding: "7px 18px", border: "none", fontFamily: "inherit", fontSize: 13,
+                fontWeight: graphMode === key ? 700 : 400,
+                background: graphMode === key ? "#2a2a50" : "transparent",
+                color: graphMode === key ? "#fff" : "#555",
+                cursor: "pointer", transition: "all 0.15s",
+              }}>{label}</button>
+            ))}
+          </div>
 
-              <SectionTitle>日別スコア</SectionTitle>
-              {Object.entries(
-                games.reduce((acc, g) => { if (!acc[g.date]) acc[g.date] = []; acc[g.date].push(g); return acc; }, {})
-              ).reverse().map(([date, dayGames]) => {
-                const ds = {};
-                members.forEach(m => { ds[m.id] = 0; });
-                dayGames.forEach(g => g.result.forEach(r => { if (ds[r.memberId] !== undefined) ds[r.memberId] += r.score; }));
-                const active = members.filter(m => dayGames.some(g => g.result.find(r => r.memberId === m.id)));
-                return (
-                  <Card key={date}>
-                    <div style={{ fontSize: 11, color: "#666", marginBottom: 8 }}>{date}（{dayGames.length}対局）</div>
-                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                      {active.sort((a,b) => ds[b.id] - ds[a.id]).map(m => (
-                        <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <Avatar name={m.name} color={m.color} size={22} />
-                          <ScoreBadge value={ds[m.id]} size={13} />
-                        </div>
-                      ))}
+          {(() => {
+            const currentChartData = graphMode === "chip" ? chipChartData : chartData;
+            const currentMembers = graphMode === "chip" ? chipActiveMembers : activeMembers;
+            const currentGames = graphMode === "chip" ? games.filter(g => g.isChip) : games;
+            if (currentChartData.length < 2) return (
+              <p style={{ color: "#444", textAlign: "center", padding: "40px 0" }}>
+                {graphMode === "chip" ? "チップが2回以上記録されるとグラフが表示されます" : "2対局以上記録するとグラフが表示されます"}
+              </p>
+            );
+            return (
+              <>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+                  {currentMembers.map(m => (
+                    <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <div style={{ width: 10, height: 10, borderRadius: "50%", background: m.color }} />
+                      <span style={{ fontSize: 12, color: "#aaa" }}>{m.name}</span>
                     </div>
-                  </Card>
-                );
-              })}
-            </>
-          }
+                  ))}
+                </div>
+                <Card style={{ padding: "16px 8px" }}>
+                  <ResponsiveContainer width="100%" height={240}>
+                    <LineChart data={currentChartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+                      <XAxis dataKey="game" tick={{ fill: "#555", fontSize: 11 }} tickLine={false} axisLine={{ stroke: "#1c1c35" }} />
+                      <YAxis tick={{ fill: "#555", fontSize: 11 }} tickLine={false} axisLine={false} />
+                      <Tooltip content={<CustomTooltip />} />
+                      <ReferenceLine y={0} stroke="#2a2a4a" strokeDasharray="4 4" />
+                      {currentMembers.map(m => (
+                        <Line key={m.id} type="monotone" dataKey={m.id} name={m.name}
+                          stroke={m.color} strokeWidth={2}
+                          dot={{ fill: m.color, r: 3 }} activeDot={{ r: 5 }} />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </Card>
+
+                <SectionTitle>日別スコア</SectionTitle>
+                {Object.entries(
+                  currentGames.reduce((acc, g) => { if (!acc[g.date]) acc[g.date] = []; acc[g.date].push(g); return acc; }, {})
+                ).sort(([a],[b]) => toDate(b) - toDate(a)).map(([date, dayGames]) => {
+                  const ds = {};
+                  members.forEach(m => { ds[m.id] = 0; });
+                  dayGames.forEach(g => g.result.forEach(r => { if (ds[r.memberId] !== undefined) ds[r.memberId] += r.score; }));
+                  const active = members.filter(m => dayGames.some(g => g.result.find(r => r.memberId === m.id)));
+                  return (
+                    <Card key={date}>
+                      <div style={{ fontSize: 11, color: "#666", marginBottom: 8 }}>{date}（{dayGames.length}件）</div>
+                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                        {active.sort((a,b) => ds[b.id] - ds[a.id]).map(m => (
+                          <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <Avatar name={m.name} color={m.color} size={22} />
+                            <ScoreBadge value={ds[m.id]} size={13} />
+                          </div>
+                        ))}
+                      </div>
+                    </Card>
+                  );
+                })}
+              </>
+            );
+          })()}
         </div>
       )}
 
-      {/* ── 相手別 ── */}
+            {/* ── 相手別 ── */}
       {subTab === "h2h" && (
         <div>
           <SectionTitle>プレイヤーを選択</SectionTitle>
@@ -1680,15 +1736,22 @@ export default function App() {
     })();
   }, []);
 
+  const membersRef = useRef(members);
+  const gamesRef = useRef(games);
+  const sessionRef = useRef(session);
+  useEffect(() => { membersRef.current = members; }, [members]);
+  useEffect(() => { gamesRef.current = games; }, [games]);
+  useEffect(() => { sessionRef.current = session; }, [session]);
+
   const handleSave = useCallback(async (newMembers, newGames, newSession) => {
     setSyncing(true);
     await saveData({
-      members: newMembers ?? members,
-      games: newGames ?? games,
-      session: newSession !== undefined ? newSession : session,
+      members: newMembers ?? membersRef.current,
+      games: newGames ?? gamesRef.current,
+      session: newSession !== undefined ? newSession : sessionRef.current,
     });
     setSyncing(false);
-  }, [members, games, session]);
+  }, []);
 
   if (loading) return (
     <div style={{ minHeight: "100vh", background: "#070712", display: "flex", alignItems: "center", justifyContent: "center" }}>
