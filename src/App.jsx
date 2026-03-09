@@ -1325,7 +1325,9 @@ function StatsTab({ members, games, setGames, onSave }) {
   const [focusMember, setFocusMember] = useState(null);
   const [selectedDate, setSelectedDate] = useState(null);
   const [rankingMode, setRankingMode] = useState("total"); // "total" | "chip"
-  const [graphMode, setGraphMode] = useState("total");     // "total" | "chip" 
+  const [graphMode, setGraphMode] = useState("total");     // "total" | "chip"
+  const [graphPeriodType, setGraphPeriodType] = useState("all"); // "all" | "day" | "month" | "year"
+  const [graphPeriodValue, setGraphPeriodValue] = useState(""); 
 
   const toDate = s => new Date(s.replace(/\//g, "-").replace(/(\d+)-(\d+)-(\d+)/, (_, y, mo, d) => `${y}-${mo.padStart(2,"0")}-${d.padStart(2,"0")}`));
 
@@ -1553,8 +1555,8 @@ function StatsTab({ members, games, setGames, onSave }) {
       {/* ── グラフ ── */}
       {subTab === "graph" && (
         <div>
-          {/* トグル */}
-          <div style={{ display: "flex", gap: 0, marginBottom: 16, borderRadius: 10, overflow: "hidden", border: "1px solid #2a2a40", width: "fit-content" }}>
+          {/* 総合/チップ トグル */}
+          <div style={{ display: "flex", gap: 0, marginBottom: 10, borderRadius: 10, overflow: "hidden", border: "1px solid #2a2a40", width: "fit-content" }}>
             {[["total","💯 総合"],["chip","🪙 チップ"]].map(([key, label]) => (
               <button key={key} onClick={() => setGraphMode(key)} style={{
                 padding: "7px 18px", border: "none", fontFamily: "inherit", fontSize: 13,
@@ -1566,63 +1568,127 @@ function StatsTab({ members, games, setGames, onSave }) {
             ))}
           </div>
 
+          {/* 期間種別トグル */}
+          <div style={{ display: "flex", gap: 0, marginBottom: 14, borderRadius: 10, overflow: "hidden", border: "1px solid #2a2a40", width: "fit-content" }}>
+            {[["all","総合"],["day","日別"],["month","月別"],["year","年別"]].map(([key, label]) => (
+              <button key={key} onClick={() => { setGraphPeriodType(key); setGraphPeriodValue(""); }} style={{
+                padding: "6px 13px", border: "none", fontFamily: "inherit", fontSize: 12,
+                fontWeight: graphPeriodType === key ? 700 : 400,
+                background: graphPeriodType === key ? "#1a3a5a" : "transparent",
+                color: graphPeriodType === key ? "#4f9cf9" : "#555",
+                cursor: "pointer", transition: "all 0.15s",
+              }}>{label}</button>
+            ))}
+          </div>
+
           {(() => {
-            const currentChartData = graphMode === "chip" ? chipChartData : chartData;
+            const baseGames = graphMode === "chip" ? games.filter(g => g.isChip) : games;
             const currentMembers = graphMode === "chip" ? chipActiveMembers : activeMembers;
-            const currentGames = graphMode === "chip" ? games.filter(g => g.isChip) : games;
-            if (currentChartData.length < 2) return (
-              <p style={{ color: "#444", textAlign: "center", padding: "40px 0" }}>
-                {graphMode === "chip" ? "チップが2回以上記録されるとグラフが表示されます" : "2対局以上記録するとグラフが表示されます"}
-              </p>
-            );
+
+            // 日・月・年の選択肢を生成
+            const allDays   = [...new Set(baseGames.map(g => g.date.replace(/-/g,"/")))].sort();
+            const allMonths = [...new Set(baseGames.map(g => { const d = toDate(g.date); return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}`; }))].sort();
+            const allYears  = [...new Set(baseGames.map(g => String(toDate(g.date).getFullYear())))].sort();
+
+            // 期間でフィルタ
+            let filteredGames = baseGames;
+            if (graphPeriodType === "day" && graphPeriodValue) {
+              filteredGames = baseGames.filter(g => g.date.replace(/-/g,"/") === graphPeriodValue);
+            } else if (graphPeriodType === "month" && graphPeriodValue) {
+              filteredGames = baseGames.filter(g => {
+                const d = toDate(g.date);
+                return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}` === graphPeriodValue;
+              });
+            } else if (graphPeriodType === "year" && graphPeriodValue) {
+              filteredGames = baseGames.filter(g => String(toDate(g.date).getFullYear()) === graphPeriodValue);
+            }
+
+            // グラフデータ生成（フィルタ後のゲームで累計）
+            const sorted = [...filteredGames].sort((a, b) => toDate(a.date) - toDate(b.date));
+            const cum = {};
+            members.forEach(m => { cum[m.id] = 0; });
+            const currentChartData = sorted.map((g, i) => {
+              g.result.forEach(r => { if (cum[r.memberId] !== undefined) cum[r.memberId] += r.score; });
+              return { game: i + 1, ...Object.fromEntries(members.map(m => [m.id, Math.round(cum[m.id] * 10) / 10])) };
+            });
+
+            const needsSelect = graphPeriodType !== "all";
+            const options = graphPeriodType === "day" ? allDays : graphPeriodType === "month" ? allMonths : allYears;
+            const dropdownLabel = { day: "日付を選択", month: "月を選択", year: "年を選択" }[graphPeriodType];
+
             return (
               <>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
-                  {currentMembers.map(m => (
-                    <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                      <div style={{ width: 10, height: 10, borderRadius: "50%", background: m.color }} />
-                      <span style={{ fontSize: 12, color: "#aaa" }}>{m.name}</span>
-                    </div>
-                  ))}
-                </div>
-                <Card style={{ padding: "16px 8px" }}>
-                  <ResponsiveContainer width="100%" height={240}>
-                    <LineChart data={currentChartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
-                      <XAxis dataKey="game" tick={{ fill: "#555", fontSize: 11 }} tickLine={false} axisLine={{ stroke: "#1c1c35" }} />
-                      <YAxis tick={{ fill: "#555", fontSize: 11 }} tickLine={false} axisLine={false} />
-                      <Tooltip content={<CustomTooltip />} />
-                      <ReferenceLine y={0} stroke="#2a2a4a" strokeDasharray="4 4" />
-                      {currentMembers.map(m => (
-                        <Line key={m.id} type="monotone" dataKey={m.id} name={m.name}
-                          stroke={m.color} strokeWidth={2}
-                          dot={{ fill: m.color, r: 3 }} activeDot={{ r: 5 }} />
-                      ))}
-                    </LineChart>
-                  </ResponsiveContainer>
-                </Card>
+                {/* ドロップダウン */}
+                {needsSelect && (
+                  <div style={{ marginBottom: 16 }}>
+                    <select
+                      value={graphPeriodValue}
+                      onChange={e => setGraphPeriodValue(e.target.value)}
+                      style={{
+                        padding: "8px 12px", borderRadius: 8, border: "1.5px solid #2a2a40",
+                        background: "#080816", color: graphPeriodValue ? "#e0e0e0" : "#555",
+                        fontSize: 13, fontFamily: "inherit", outline: "none", width: "100%",
+                      }}
+                    >
+                      <option value="">{dropdownLabel}</option>
+                      {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
+                  </div>
+                )}
 
-                <SectionTitle>日別スコア</SectionTitle>
-                {Object.entries(
-                  currentGames.reduce((acc, g) => { if (!acc[g.date]) acc[g.date] = []; acc[g.date].push(g); return acc; }, {})
-                ).sort(([a],[b]) => toDate(b) - toDate(a)).map(([date, dayGames]) => {
-                  const ds = {};
-                  members.forEach(m => { ds[m.id] = 0; });
-                  dayGames.forEach(g => g.result.forEach(r => { if (ds[r.memberId] !== undefined) ds[r.memberId] += r.score; }));
-                  const active = members.filter(m => dayGames.some(g => g.result.find(r => r.memberId === m.id)));
-                  return (
-                    <Card key={date}>
-                      <div style={{ fontSize: 11, color: "#666", marginBottom: 8 }}>{date}（{dayGames.length}件）</div>
-                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                        {active.sort((a,b) => ds[b.id] - ds[a.id]).map(m => (
-                          <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <Avatar name={m.name} color={m.color} size={22} />
-                            <ScoreBadge value={ds[m.id]} size={13} />
-                          </div>
-                        ))}
-                      </div>
-                    </Card>
-                  );
-                })}
+                {(needsSelect && !graphPeriodValue)
+                  ? <p style={{ color: "#444", textAlign: "center", padding: "30px 0" }}>{dropdownLabel}</p>
+                  : currentChartData.length < 2
+                    ? <p style={{ color: "#444", textAlign: "center", padding: "30px 0" }}>この期間のデータが少なすぎます</p>
+                    : <>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+                          {currentMembers.map(m => (
+                            <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                              <div style={{ width: 10, height: 10, borderRadius: "50%", background: m.color }} />
+                              <span style={{ fontSize: 12, color: "#aaa" }}>{m.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <Card style={{ padding: "16px 8px" }}>
+                          <ResponsiveContainer width="100%" height={240}>
+                            <LineChart data={currentChartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+                              <XAxis dataKey="game" tick={{ fill: "#555", fontSize: 11 }} tickLine={false} axisLine={{ stroke: "#1c1c35" }} />
+                              <YAxis tick={{ fill: "#555", fontSize: 11 }} tickLine={false} axisLine={false} />
+                              <Tooltip content={<CustomTooltip />} />
+                              <ReferenceLine y={0} stroke="#2a2a4a" strokeDasharray="4 4" />
+                              {currentMembers.map(m => (
+                                <Line key={m.id} type="monotone" dataKey={m.id} name={m.name}
+                                  stroke={m.color} strokeWidth={2}
+                                  dot={{ fill: m.color, r: 3 }} activeDot={{ r: 5 }} />
+                              ))}
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </Card>
+
+                        <SectionTitle>対局スコア</SectionTitle>
+                        {Object.entries(
+                          filteredGames.reduce((acc, g) => { if (!acc[g.date]) acc[g.date] = []; acc[g.date].push(g); return acc; }, {})
+                        ).sort(([a],[b]) => toDate(b) - toDate(a)).map(([date, dayGames]) => {
+                          const ds = {};
+                          members.forEach(m => { ds[m.id] = 0; });
+                          dayGames.forEach(g => g.result.forEach(r => { if (ds[r.memberId] !== undefined) ds[r.memberId] += r.score; }));
+                          const active = members.filter(m => dayGames.some(g => g.result.find(r => r.memberId === m.id)));
+                          return (
+                            <Card key={date}>
+                              <div style={{ fontSize: 11, color: "#666", marginBottom: 8 }}>{date}（{dayGames.length}件）</div>
+                              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                                {active.sort((a,b) => ds[b.id] - ds[a.id]).map(m => (
+                                  <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <Avatar name={m.name} color={m.color} size={22} />
+                                    <ScoreBadge value={ds[m.id]} size={13} />
+                                  </div>
+                                ))}
+                              </div>
+                            </Card>
+                          );
+                        })}
+                      </>
+                }
               </>
             );
           })()}
